@@ -1,0 +1,9 @@
+streamlit
+rasterio
+numpy
+pandas
+pillow
+scipy
+torch
+open-clip-torch
+faiss-cpu
