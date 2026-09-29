@@ -441,7 +441,8 @@ with tab_search:
             for i, res in enumerate(results):
                 with cols[i % 4]:
                     if Path(res["filepath"]).exists(): 
-                        st.image(Image.open(res["filepath"]), width="stretch")
+                        # FIXED: use_container_width=True replaces width="stretch" or use_column_width
+                        st.image(Image.open(res["filepath"]), use_container_width=True)
                     st.markdown(f"**ID:** {res['tile_id']} | **Score:** {res['relevance_score']:.4f}")
                     
                     b1, b2 = st.columns(2)
@@ -496,14 +497,15 @@ with tab_change:
 
         v1, v2, v3 = st.columns(3)
         with v1: 
-            st.image(((np.clip(sb_d, -30, 5)+30)/35*255).astype(np.uint8), caption="Baseline SAR", width="stretch")
+            # FIXED: use_container_width=True replaces width="stretch"
+            st.image(((np.clip(sb_d, -30, 5)+30)/35*255).astype(np.uint8), caption="Baseline SAR", use_container_width=True)
         with v2:
             norm_t = ((np.clip(st_d, -30, 5)+30)/35*255).astype(np.uint8)
             overlay = np.stack([norm_t]*3, axis=-1)
             overlay[res["final_mask"]] = [255, 30, 30]
-            st.image(overlay, caption="Target + Validated Structures", width="stretch")
+            st.image(overlay, caption="Target + Validated Structures", use_container_width=True)
         with v3: 
-            st.image((np.clip(res["target_variance"]/0.05, 0, 1)*255).astype(np.uint8), caption="Spatial Variance", width="stretch")
+            st.image((np.clip(res["target_variance"]/0.05, 0, 1)*255).astype(np.uint8), caption="Spatial Variance", use_container_width=True)
     else: 
         st.info("Ensure the real GeoTIFF rasters are available.")
 
@@ -513,7 +515,7 @@ with tab_prov:
     if df.empty: 
         st.info("No logs.")
     else:
-        st.dataframe(df, width="stretch")
+        st.dataframe(df, use_container_width=True)
         st.download_button("Download CSV", df.to_csv(index=False).encode('utf-8'), "audit_log.csv", "text/csv")
 
 with tab_docs:
@@ -561,7 +563,8 @@ with tab_dynamic:
                     c_img, c_query = st.columns([1, 1])
                     
                     with c_img:
-                        st.image(pil_img, caption="Dynamically Normalized Image View", use_column_width=True)
+                        # FIXED: use_container_width=True
+                        st.image(pil_img, caption="Dynamically Normalized Image View", use_container_width=True)
                         
                     with c_query:
                         st.markdown("#### Real-Time Phenomenon Detection")
