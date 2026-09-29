@@ -20,6 +20,7 @@ from PIL import Image
 import rasterio
 from rasterio.windows import Window
 from rasterio.transform import from_bounds
+from rasterio.io import MemoryFile
 from scipy.ndimage import uniform_filter, label
 
 import streamlit as st
@@ -312,14 +313,11 @@ def ingest_raster(engine, raster_path):
                 if np.all(data == 0): continue
 
                 if data.shape[0] >= 3:
-                    # GEE Optical Export: B3(Green), B4(Red), B8(NIR), B11(SWIR)
-                    # Create Pseudo-True Color: R=Red(1), G=Green(0), B=Green(0)
                     r = data[1].astype(np.float32)
                     g = data[0].astype(np.float32)
                     b = data[0].astype(np.float32)
                     rgb_float = np.stack([r, g, b], axis=-1)
 
-                    # Auto-Contrast to fix washed out or dark imagery
                     p2, p98 = np.percentile(rgb_float, 2), np.percentile(rgb_float, 98)
                     if p98 > p2:
                         rgb_scaled = np.clip((rgb_float - p2) / (p98 - p2) * 255.0, 0, 255)
@@ -393,9 +391,7 @@ with st.sidebar:
     st.subheader("Data Management")
     if st.button("Index Archive"):
         with st.spinner("Targeting optical index..."):
-            # STRICT FIX: Only index the optical Sentinel-2 file for visual AI search
             target_optical = find_raster_file("real_sentinel2_target.tif")
-            
             if target_optical.exists():
                 ingest_raster(engine, target_optical)
                 st.success("Indexing complete.")
@@ -409,15 +405,14 @@ with st.sidebar:
         engine._load_index()
         st.warning("Database reset.")
 
-tab_search, tab_change, tab_prov, tab_docs = st.tabs([
-    "1. Semantic Retrieval", "2. Anomaly Verification", "3. Audit Trail", "4. Architecture"
+tab_search, tab_change, tab_prov, tab_docs, tab_dynamic = st.tabs([
+    "1. Semantic Retrieval", "2. Anomaly Verification", "3. Audit Trail", "4. Architecture", "5. Live UI Ingestion"
 ])
 
 with tab_search:
     st.subheader("Multimodal Natural Language Archive Interrogation")
     c1, c2 = st.columns([4, 1])
     with c1: 
-        # NEW FEATURE: Tactical Preset Dropdown + Custom Input
         preset = st.selectbox("Target Signature Presets:", [
             "Custom Free-Text Query...", 
             "High-density urban residential blocks", 
@@ -434,7 +429,6 @@ with tab_search:
     with c2: 
         top_k = st.number_input("Max Results:", min_value=1, max_value=24, value=4)
 
-    # Save results to session state so they persist when secondary buttons are clicked
     if st.button("Execute Semantic Query"):
         st.session_state.last_results = engine.search(query_input, top_k=top_k)
 
@@ -457,6 +451,7 @@ with tab_search:
                     if b2.button("Reject", key=f"r_{res['tile_id']}"): 
                         log_decision(res['tile_id'], query_input, "REJECTED", res['relevance_score'], res['bounds'], res['source_file'])
                         st.error("Rejected.")
+                        
 with tab_change:
     st.subheader("Multi-Source Environmental False-Alarm Suppression")
     with st.expander("Filter Calibration Parameters", expanded=True):
@@ -529,3 +524,66 @@ with tab_docs:
     st.latex(r"\text{Var}(I) = \frac{1}{N}\sum_{i=1}^{N}(I_i - \mu)^2")
     st.markdown("3. Exclusion Matrix:")
     st.latex(r"M_{\text{final}} = (\Delta I > 0.09) \cap (\text{Var} > 0.020) \cap (\Delta\text{NDVI} < 0.10) \cap (\text{MNDWI} < 0.0) \cap (\text{Slope} < 20^\circ)")
+
+with tab_dynamic:
+    st.subheader("Dynamic Sensor-Agnostic Ingestion Engine (Phase-2 Prototype)")
+    st.markdown("Upload a raw `.tif` or `.tiff` file. The engine will parse it in-memory, normalize the radiometric arrays, and allow for instant zero-shot semantic identification without modifying the local database.")
+    
+    uploaded_file = st.file_uploader("Upload Raw Satellite Raster", type=["tif", "tiff"])
+    
+    if uploaded_file is not None:
+        try:
+            with MemoryFile(uploaded_file.getvalue()) as memfile:
+                with memfile.open() as src:
+                    crs = src.crs
+                    count = src.count
+                    
+                    # Route bands dynamically based on sensor type
+                    if count >= 3:
+                        raw_data = src.read([1, 2, 3]) 
+                    else:
+                        band1 = src.read(1)
+                        raw_data = np.stack([band1, band1, band1])
+
+                    # 2nd-98th Percentile Radiometric Normalization
+                    p2, p98 = np.percentile(raw_data, (2, 98))
+                    if p98 > p2:
+                        stretched = np.clip((raw_data - p2) / (p98 - p2 + 1e-6) * 255.0, 0, 255).astype(np.uint8)
+                    else:
+                        stretched = np.clip(raw_data * 255.0, 0, 255).astype(np.uint8)
+
+                    # Convert (C, H, W) to (H, W, C) for PIL Image rendering
+                    rgb_image = np.transpose(stretched, (1, 2, 0))
+                    pil_img = Image.fromarray(rgb_image)
+                    
+                    st.success(f"Raster parsed successfully! Spatial Reference: {crs} | Band Count: {count}")
+                    
+                    c_img, c_query = st.columns([1, 1])
+                    
+                    with c_img:
+                        st.image(pil_img, caption="Dynamically Normalized Image View", use_column_width=True)
+                        
+                    with c_query:
+                        st.markdown("#### Real-Time Phenomenon Detection")
+                        dynamic_query = st.text_input("Enter physical characteristic to detect:", "dense urban area")
+                        
+                        if st.button("Run Real-Time Inference"):
+                            if not engine.model_loaded:
+                                st.error("Please load the AI Model Weights from the sidebar first!")
+                            else:
+                                with st.spinner("Analyzing spectral signatures against query..."):
+                                    # Encode both the uploaded image and text input
+                                    img_feat = engine.encode_image(pil_img)
+                                    text_feat = engine.encode_text(dynamic_query)
+                                    
+                                    # Calculate Cosine Similarity
+                                    score = np.dot(img_feat, text_feat[0])
+                                    
+                                    st.metric(label=f"Similarity Score: '{dynamic_query}'", value=f"{score*100:.2f}%")
+                                    
+                                    if score > 0.22: 
+                                        st.success(f"✅ Phenomenon detected.")
+                                    else:
+                                        st.warning(f"❌ Phenomenon not present in sufficient quantities.")
+        except Exception as e:
+            st.error(f"Error processing raster: {str(e)}")
