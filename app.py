@@ -1,7 +1,8 @@
 # ==================================================================================================
-# PROJECT: ARTHADRISHTI - SENSOR-AGNOSTIC EO INTELLIGENCE & SEMANTIC RETRIEVAL PLATFORM
-# PROBLEM STATEMENT: NTRO / SIH26227
-# ARCHITECTURE: 100% IN-MEMORY DYNAMIC INGESTION, ZERO-SHOT AI, DETERMINISTIC CHANGE DETECTION
+# PLATFORM: ARTHADRISHTI - NATIONAL LEVEL EARTH OBSERVATION INTELLIGENCE
+# SIH 2026 PROBLEM STATEMENT: NTRO / 26227
+# CAPABILITIES: Sensor-Agnostic Ingestion, Absolute-Threshold Zero-Shot AI, 
+#               Multi-Temporal Anomaly Detection, Sovereign Analyst Provenance.
 # ==================================================================================================
 
 import os
@@ -22,7 +23,9 @@ from scipy.ndimage import uniform_filter, label
 
 import streamlit as st
 
-# Safe imports for Machine Learning acceleration
+# ==================================================================================================
+# 1. ACCELERATION & ML DEPENDENCIES (WITH FAILSAFES)
+# ==================================================================================================
 try:
     import torch
     TORCH_AVAILABLE = True
@@ -41,620 +44,472 @@ try:
 except ImportError:
     FAISS_AVAILABLE = False
 
-
 # ==================================================================================================
-# 1. CORE SYSTEM CONFIGURATION & UI STYLING
+# 2. SYSTEM CONSTANTS & TAXONOMY
 # ==================================================================================================
-
 TILE_SIZE = 256
 EMBEDDING_DIM = 512
+SIMILARITY_THRESHOLD = 0.225 # Absolute threshold to prevent AI hallucinations
 
-# Remote Sensing Multi-Prompt Taxonomy for Zero-Shot Classification
-EO_PROMPT_TAXONOMY = {
+# Advanced Multi-Prompt Taxonomy for Zero-Shot Classification
+TAXONOMY_KNOWLEDGE_BASE = {
     "Water Body / River / Lake": [
         "satellite aerial view of open water body, lake, river, or ocean",
-        "radar SAR low backscatter calm dark water surface",
-        "deep blue or dark surface water reservoir"
+        "deep blue or dark surface water reservoir from above"
     ],
     "Dense Urban / Built-up": [
         "satellite aerial view of urban buildings, city blocks, concrete infrastructure",
-        "dense residential housing and road grid",
-        "radar high backscatter bright metallic building reflection"
+        "dense residential housing and road grid from space"
     ],
     "Agricultural Cropland": [
         "satellite aerial view of agricultural fields, cropland, farmland plots",
-        "geometric cultivated rural farming fields",
-        "vegetation crop rows and agricultural plantations"
+        "geometric cultivated rural farming fields"
     ],
     "Forest / Dense Vegetation": [
         "satellite aerial view of dense forest canopy, woods, and wild trees",
-        "thick green natural woodland cover",
-        "dense tropical jungle or hillside forest"
+        "thick green natural woodland cover from above"
     ],
     "Barren Land / Cleared Soil": [
         "satellite aerial view of bare soil, cleared earth, dirt, and arid land",
-        "dry exposed ground without vegetation",
-        "sand, gravel, and unpaved excavation ground"
+        "dry exposed ground without vegetation"
     ],
     "Industrial / Commercial Facilities": [
         "satellite aerial view of large industrial warehouse structures and factories",
-        "commercial logistics hub with flat roof storage facilities",
-        "large shipping and manufacturing installations"
+        "commercial logistics hub with flat roof storage facilities"
     ]
 }
 
-st.set_page_config(
-    page_title="ArthaDrishti | Semantic EO Intelligence",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ==================================================================================================
+# 3. STREAMLIT UI CONFIGURATION
+# ==================================================================================================
+st.set_page_config(page_title="ArthaDrishti | Semantic EO", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
     .main { background-color: #0b0f19; color: #e2e8f0; }
     h1, h2, h3, h4 { color: #f8fafc; font-family: 'Segoe UI', Tahoma, sans-serif; font-weight: 600; }
-    .stMetric { background-color: #1e293b; border: 1px solid #334155; padding: 12px; border-radius: 6px; }
-    div[data-testid="stMetricValue"] { color: #38bdf8 !important; }
+    .stMetric { background-color: #1e293b; border: 1px solid #334155; padding: 12px; border-radius: 6px; border-left: 4px solid #0284c7; }
+    div[data-testid="stMetricValue"] { color: #e2e8f0 !important; }
     .stButton>button { background-color: #0284c7; color: white; border: none; border-radius: 4px; font-weight: 600; width: 100%; transition: all 0.2s; }
     .stButton>button:hover { background-color: #0369a1; border-color: #38bdf8; }
-    .audit-card { background-color: #1e293b; padding: 14px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #334155; }
-    .tag-water { color: #38bdf8; font-weight: bold; }
-    .tag-urban { color: #f97316; font-weight: bold; }
-    .tag-agri { color: #4ade80; font-weight: bold; }
+    .audit-card { background-color: #162032; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #334155; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; }
+    .badge-unclassified { background-color: #475569; color: white; }
+    .badge-classified { background-color: #059669; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
-
 # ==================================================================================================
-# 2. SENSOR-AGNOSTIC IMAGE ENGINE (PURE NUMPY + PILLOW, NO OPENCV)
+# 4. SENSOR-AGNOSTIC DATA PIPELINE
 # ==================================================================================================
-
-class SensorAgnosticProcessor:
-    """Handles universal GeoTIFF ingestion, dynamic True-Color synthesis, and contrast normalization."""
-
+class EarthObservationPipeline:
+    """Handles parsing of generic GeoTIFFs into normalized machine-learning ready arrays."""
+    
     @staticmethod
-    def process_raster_bytes(file_bytes: bytes, red_ch: int = 1, green_ch: int = 2, blue_ch: int = 3) -> Tuple[Image.Image, np.ndarray, dict]:
+    def synthesize_true_color(file_bytes: bytes, r_idx: int, g_idx: int, b_idx: int) -> Tuple[Image.Image, np.ndarray, dict]:
+        """Dynamically routes bands and normalizes radiometric contrast for any optical sensor."""
         with MemoryFile(file_bytes) as memfile:
             with memfile.open() as src:
-                band_count = src.count
-                crs_str = str(src.crs) if src.crs else "Unprojected / Local"
-                bounds = src.bounds
-                width, height = src.width, src.height
-                
+                b_count = src.count
                 meta = {
-                    "crs": crs_str,
-                    "bands": band_count,
-                    "bounds": [bounds.left, bounds.bottom, bounds.right, bounds.top],
-                    "dimensions": f"{width} x {height}",
-                    "driver": src.driver
+                    "crs": str(src.crs) if src.crs else "Unprojected",
+                    "bands": b_count,
+                    "bounds": [src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top],
+                    "width": src.width, "height": src.height
                 }
 
-                # Single-band: SAR (Sentinel-1), DEM (SRTM), or Panchromatic
-                if band_count == 1:
-                    raw = src.read(1).astype(np.float32)
-                    # Replace NaN / Inf values
-                    raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0)
-                    
-                    # 2nd-98th percentile stretch for radar/topography
+                # Single-band handling (e.g., SAR or Grayscale)
+                if b_count == 1:
+                    raw = np.nan_to_num(src.read(1).astype(np.float32))
                     p2, p98 = np.percentile(raw, 2), np.percentile(raw, 98)
-                    if p98 > p2:
-                        norm = np.clip((raw - p2) / (p98 - p2), 0.0, 1.0)
-                    else:
-                        norm = np.clip(raw, 0.0, 1.0)
-                    
+                    norm = np.clip((raw - p2) / (p98 - p2 + 1e-6), 0.0, 1.0)
                     norm_uint8 = (norm * 255.0).astype(np.uint8)
-                    # 3-channel grayscale stack (compatible with standard vision models)
                     rgb_array = np.stack([norm_uint8, norm_uint8, norm_uint8], axis=-1)
-
-                # Multi-band: Optical (Sentinel-2, Landsat/USGS, Planet)
+                
+                # Multi-band True Color Composite
                 else:
-                    # Guard band indices to prevent out-of-bounds reads
-                    r_idx = min(max(1, red_ch), band_count)
-                    g_idx = min(max(1, green_ch), band_count)
-                    b_idx = min(max(1, blue_ch), band_count)
+                    # Failsafe bounds check for user band inputs
+                    ri = min(max(1, r_idx), b_count)
+                    gi = min(max(1, g_idx), b_count)
+                    bi = min(max(1, b_idx), b_count)
 
-                    r_band = np.nan_to_num(src.read(r_idx).astype(np.float32))
-                    g_band = np.nan_to_num(src.read(g_idx).astype(np.float32))
-                    b_band = np.nan_to_num(src.read(b_idx).astype(np.float32))
+                    r = np.nan_to_num(src.read(ri).astype(np.float32))
+                    g = np.nan_to_num(src.read(gi).astype(np.float32))
+                    b = np.nan_to_num(src.read(bi).astype(np.float32))
 
-                    stack = np.stack([r_band, g_band, b_band], axis=-1)
-
-                    # Contrast stretch across the combined RGB array
-                    p2, p98 = np.percentile(stack, 2), np.percentile(stack, 98)
+                    stack = np.stack([r, g, b], axis=-1)
+                    p2, p98 = np.percentile(stack, (2, 98))
+                    
                     if p98 > p2:
                         rgb_array = np.clip((stack - p2) / (p98 - p2) * 255.0, 0, 255).astype(np.uint8)
                     else:
                         rgb_array = np.clip(stack * 255.0, 0, 255).astype(np.uint8)
 
-                pil_image = Image.fromarray(rgb_array)
-                return pil_image, rgb_array, meta
+                return Image.fromarray(rgb_array), rgb_array, meta
 
     @staticmethod
-    def extract_spatial_chips(rgb_array: np.ndarray, chip_size: int = TILE_SIZE, max_chips: int = 16) -> List[Dict]:
-        """Slices raster arrays into uniform chips for localized zero-shot classification."""
+    def extract_analytical_chips(rgb_array: np.ndarray, max_chips: int = 24) -> List[Dict]:
+        """Slices massive rasters into standardized TILE_SIZE analytical chips."""
         h, w, _ = rgb_array.shape
         chips = []
-        chip_counter = 0
+        c_id = 0
 
-        y_step = max(chip_size, (h - chip_size) // 4) if h > chip_size else chip_size
-        x_step = max(chip_size, (w - chip_size) // 4) if w > chip_size else chip_size
+        # Dynamic step sizing to cover the image without generating thousands of chips
+        y_step = max(TILE_SIZE, (h - TILE_SIZE) // 4) if h > TILE_SIZE else TILE_SIZE
+        x_step = max(TILE_SIZE, (w - TILE_SIZE) // 4) if w > TILE_SIZE else TILE_SIZE
 
-        for y in range(0, max(1, h - chip_size + 1), y_step):
-            for x in range(0, max(1, w - chip_size + 1), x_step):
-                if chip_counter >= max_chips:
-                    break
+        for y in range(0, max(1, h - TILE_SIZE + 1), y_step):
+            for x in range(0, max(1, w - TILE_SIZE + 1), x_step):
+                if c_id >= max_chips: break
                 
-                sub_arr = rgb_array[y:y+chip_size, x:x+chip_size, :]
-                # Pad if chip is smaller than requested tile size
-                if sub_arr.shape[0] < chip_size or sub_arr.shape[1] < chip_size:
-                    padded = np.zeros((chip_size, chip_size, 3), dtype=np.uint8)
-                    padded[:sub_arr.shape[0], :sub_arr.shape[1], :] = sub_arr
-                    sub_arr = padded
+                chip_arr = rgb_array[y:y+TILE_SIZE, x:x+TILE_SIZE, :]
+                
+                # Pad edges if chip is too small
+                if chip_arr.shape[0] < TILE_SIZE or chip_arr.shape[1] < TILE_SIZE:
+                    padded = np.zeros((TILE_SIZE, TILE_SIZE, 3), dtype=np.uint8)
+                    padded[:chip_arr.shape[0], :chip_arr.shape[1], :] = chip_arr
+                    chip_arr = padded
 
-                # Skip completely black or zero-information chips
-                if np.mean(sub_arr) < 3.0:
-                    continue
+                # Ignore pure black/nodata areas
+                if np.mean(chip_arr) < 5.0: continue
 
                 chips.append({
-                    "chip_id": f"tile_{chip_counter + 1}",
-                    "image": Image.fromarray(sub_arr),
-                    "array": sub_arr,
-                    "window": [x, y, chip_size, chip_size]
+                    "id": f"spatial_chip_{c_id}",
+                    "image": Image.fromarray(chip_arr),
+                    "window": [x, y, TILE_SIZE, TILE_SIZE]
                 })
-                chip_counter += 1
+                c_id += 1
 
-            if chip_counter >= max_chips:
-                break
-
-        if not chips:
-            chips.append({
-                "chip_id": "tile_1",
-                "image": Image.fromarray(rgb_array),
-                "array": rgb_array,
-                "window": [0, 0, w, h]
-            })
-
+        if not chips: # Fallback for tiny images
+            chips.append({"id": "spatial_chip_0", "image": Image.fromarray(rgb_array), "window": [0,0,w,h]})
         return chips
 
 
 # ==================================================================================================
-# 3. ADVANCED ZERO-SHOT SEMANTIC ENGINE
+# 5. ABSOLUTE-THRESHOLD SEMANTIC AI ENGINE
 # ==================================================================================================
-
-class EarthObservationSemanticEngine:
-    """Manages Vision Transformer encoders, ensemble zero-shot prompts, and in-memory search."""
-
+class ZeroShotSemanticCore:
+    """Manages AI embeddings and absolute cosine similarity search."""
     def __init__(self):
         self.device = "cuda" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu"
-        self.model_loaded = False
+        self.active = False
         self.model = None
         self.preprocess = None
         self.tokenizer = None
-        self.in_memory_index: List[Dict] = []
-        self.precomputed_prompt_embeddings: Dict[str, np.ndarray] = {}
-
-    def load_model(self):
-        if not OPEN_CLIP_AVAILABLE:
-            raise RuntimeError("open_clip library is not available in environment.")
+        self.prompt_vectors = {}
         
-        # Load lightweight, accurate ViT-B-32 trained on LAION-2B
+        # In-Memory Database for SIH demonstration
+        self.vector_index: List[Dict] = []
+
+    def boot_neural_core(self):
+        if not OPEN_CLIP_AVAILABLE: raise RuntimeError("OpenCLIP library missing.")
         model, _, preprocess = open_clip.create_model_and_transforms('ViT-B-32', pretrained='laion2b_s34b_b79k')
         self.tokenizer = open_clip.get_tokenizer('ViT-B-32')
         self.model = model.to(self.device).eval()
         self.preprocess = preprocess
-        self.model_loaded = True
-        self._precompute_taxonomy_vectors()
+        self.active = True
+        self._cache_taxonomy()
 
-    def _fallback_vector(self, text_or_img: Any) -> np.ndarray:
-        """Deterministic mathematical fallback vector if weights are not yet downloaded."""
+    def _fallback_embed(self, data: Any) -> np.ndarray:
         vec = np.zeros(EMBEDDING_DIM, dtype=np.float32)
-        if isinstance(text_or_img, str):
-            seed = sum(ord(c) * (37 ** (i % 7)) for i, c in enumerate(text_or_img))
+        if isinstance(data, str):
+            seed = sum(ord(c) * (7 ** (i%5)) for i,c in enumerate(data))
             rng = np.random.RandomState(seed % (2**31 - 1))
             vec = rng.randn(EMBEDDING_DIM).astype(np.float32)
-        elif isinstance(text_or_img, Image.Image):
-            resized = text_or_img.convert("RGB").resize((16, 16))
-            arr = np.array(resized, dtype=np.float32).flatten()
+        elif isinstance(data, Image.Image):
+            arr = np.array(data.convert("RGB").resize((16,16)), dtype=np.float32).flatten()
             vec[:min(len(arr), EMBEDDING_DIM)] = arr[:EMBEDDING_DIM]
-        norm = np.linalg.norm(vec)
-        return vec / (norm + 1e-7)
+        return vec / (np.linalg.norm(vec) + 1e-7)
 
-    def encode_text(self, text: str) -> np.ndarray:
-        if self.model_loaded and self.model:
+    def embed_text(self, text: str) -> np.ndarray:
+        if self.active:
             tokens = self.tokenizer([text]).to(self.device)
             with torch.no_grad():
-                feat = self.model.encode_text(tokens)
-                feat /= feat.norm(dim=-1, keepdim=True)
-                return feat.cpu().numpy()[0].astype(np.float32)
-        return self._fallback_vector(text)
+                v = self.model.encode_text(tokens)
+                v /= v.norm(dim=-1, keepdim=True)
+                return v.cpu().numpy()[0].astype(np.float32)
+        return self._fallback_embed(text)
 
-    def encode_image(self, pil_img: Image.Image) -> np.ndarray:
-        if self.model_loaded and self.model:
-            tensor = self.preprocess(pil_img).unsqueeze(0).to(self.device)
+    def embed_image(self, img: Image.Image) -> np.ndarray:
+        if self.active:
+            tensor = self.preprocess(img).unsqueeze(0).to(self.device)
             with torch.no_grad():
-                feat = self.model.encode_image(tensor)
-                feat /= feat.norm(dim=-1, keepdim=True)
-                return feat.cpu().numpy()[0].astype(np.float32)
-        return self._fallback_vector(pil_img)
+                v = self.model.encode_image(tensor)
+                v /= v.norm(dim=-1, keepdim=True)
+                return v.cpu().numpy()[0].astype(np.float32)
+        return self._fallback_embed(img)
 
-    def _precompute_taxonomy_vectors(self):
-        """Precomputes prompt ensemble vectors to make scanning instant."""
-        for label_name, prompt_list in EO_PROMPT_TAXONOMY.items():
-            vectors = [self.encode_text(p) for p in prompt_list]
-            # Average ensemble vector normalized to unit length
-            mean_vec = np.mean(vectors, axis=0)
-            mean_vec /= (np.linalg.norm(mean_vec) + 1e-7)
-            self.precomputed_prompt_embeddings[label_name] = mean_vec
+    def _cache_taxonomy(self):
+        """Pre-calculates mean embeddings for the multi-prompt taxonomy."""
+        for label, prompts in TAXONOMY_KNOWLEDGE_BASE.items():
+            vecs = [self.embed_text(p) for p in prompts]
+            mean_v = np.mean(vecs, axis=0)
+            self.prompt_vectors[label] = mean_v / (np.linalg.norm(mean_v) + 1e-7)
 
-    def classify_chip(self, pil_img: Image.Image, candidate_classes: List[str]) -> Tuple[str, float, Dict[str, float]]:
-        """Classifies a chip against candidate classes using normalized softmax probabilities."""
-        img_vec = self.encode_image(pil_img)
-        scores = {}
+    def absolute_classification(self, img: Image.Image, targets: List[str]) -> Tuple[str, float]:
+        """
+        CRITICAL FIX: Uses Absolute Cosine Similarity instead of Softmax.
+        If the highest score is below SIMILARITY_THRESHOLD, it returns "Unclassified".
+        """
+        img_v = self.embed_image(img)
+        best_score = -1.0
+        best_label = "Unclassified / Background"
 
-        for cls_name in candidate_classes:
-            if cls_name in self.precomputed_prompt_embeddings:
-                txt_vec = self.precomputed_prompt_embeddings[cls_name]
-            else:
-                txt_vec = self.encode_text(cls_name)
+        for label in targets:
+            txt_v = self.prompt_vectors.get(label, self.embed_text(label))
+            score = float(np.dot(img_v, txt_v))
+            if score > best_score:
+                best_score = score
+                best_label = label
+
+        # The Anti-Hallucination Gate
+        if best_score < SIMILARITY_THRESHOLD:
+            return "Unclassified / Background", best_score
             
-            # Cosine similarity
-            cosine_sim = float(np.dot(img_vec, txt_vec))
-            scores[cls_name] = cosine_sim
+        return best_label, best_score
 
-        # Softmax over cosine similarities with temperature scaling (T=0.07)
-        labels = list(scores.keys())
-        raw_sims = np.array([scores[l] for l in labels])
-        exp_sims = np.exp((raw_sims - np.max(raw_sims)) / 0.07)
-        probs = exp_sims / (np.sum(exp_sims) + 1e-7)
-        prob_dict = {labels[i]: float(probs[i]) for i in range(len(labels))}
-
-        best_idx = int(np.argmax(probs))
-        return labels[best_idx], prob_dict[labels[best_idx]], prob_dict
-
-    def register_chip(self, chip_dict: Dict, source_filename: str):
-        vec = self.encode_image(chip_dict["image"])
-        self.in_memory_index.append({
-            "chip_id": chip_dict["chip_id"],
-            "source": source_filename,
-            "image": chip_dict["image"],
-            "window": chip_dict["window"],
-            "embedding": vec
+    def ingest_to_memory(self, chip: Dict, source: str):
+        v = self.embed_image(chip["image"])
+        self.vector_index.append({
+            "id": chip["id"], "source": source, "image": chip["image"], 
+            "window": chip["window"], "vector": v
         })
 
-    def search_index(self, query: str, top_k: int = 4) -> List[Dict]:
-        if not self.in_memory_index:
-            return []
+    def semantic_search(self, query: str, top_k: int = 4) -> List[Dict]:
+        if not self.vector_index: return []
+        q_v = self.embed_text(query)
+        results = []
+        for item in self.vector_index:
+            score = float(np.dot(q_v, item["vector"]))
+            results.append({**item, "score": score})
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
+
+
+# ==================================================================================================
+# 6. MULTI-TEMPORAL CHANGE ENGINE
+# ==================================================================================================
+class AnomalyDetectionEngine:
+    @staticmethod
+    def compute_change(b_arr: np.ndarray, t_arr: np.ndarray, threshold: float) -> Tuple[np.ndarray, dict]:
+        """Computes structural deviations between two unaligned/raw arrays."""
+        # Align extents
+        min_h, min_w = min(b_arr.shape[0], t_arr.shape[0]), min(b_arr.shape[1], t_arr.shape[1])
+        b_crop, t_crop = b_arr[:min_h, :min_w], t_arr[:min_h, :min_w]
         
-        query_vec = self.encode_text(query)
-        scored = []
-        for item in self.in_memory_index:
-            sim = float(np.dot(query_vec, item["embedding"]))
-            scored.append({**item, "similarity": sim})
+        b_gray = np.mean(b_crop, axis=-1) / 255.0
+        t_gray = np.mean(t_crop, axis=-1) / 255.0
         
-        scored.sort(key=lambda x: x["similarity"], reverse=True)
-        return scored[:top_k]
+        diff = np.abs(t_gray - b_gray)
+        raw_mask = diff > threshold
+        
+        # Morphological Noise Suppression (removes speckle < 15 pixels)
+        labeled, num_features = label(raw_mask)
+        unique, counts = np.unique(labeled, return_counts=True)
+        clean_mask = np.zeros_like(raw_mask, dtype=bool)
+        for cid, size in zip(unique, counts):
+            if cid != 0 and size >= 15:
+                clean_mask[labeled == cid] = True
+                
+        metrics = {
+            "total_pixels": raw_mask.size,
+            "anomalies": int(np.sum(clean_mask)),
+            "noise_suppressed": int(np.sum(raw_mask) - np.sum(clean_mask))
+        }
+        return clean_mask, metrics
 
 
 # ==================================================================================================
-# 4. AUDIT & PROVENANCE ENGINE (IN-MEMORY & DOWNLOADABLE)
+# 7. STATE MANAGEMENT & SIDEBAR
 # ==================================================================================================
+if "ai_engine" not in st.session_state: st.session_state.ai_engine = ZeroShotSemanticCore()
+if "audit_log" not in st.session_state: st.session_state.audit_log = []
 
-if "audit_trail" not in st.session_state:
-    st.session_state.audit_trail = []
-
-def record_analyst_decision(tile_id: str, classification: str, confidence: float, decision: str, source: str):
-    entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "tile_id": tile_id,
-        "classification": classification,
-        "confidence": f"{confidence * 100:.1f}%",
-        "decision": decision,
-        "source_file": source
-    }
-    st.session_state.audit_trail.append(entry)
-
-
-# ==================================================================================================
-# 5. STREAMLIT APPLICATION CONTROLS & SESSION STATE
-# ==================================================================================================
-
-if "semantic_engine" not in st.session_state:
-    st.session_state.semantic_engine = EarthObservationSemanticEngine()
-
-engine: EarthObservationSemanticEngine = st.session_state.semantic_engine
+ai: ZeroShotSemanticCore = st.session_state.ai_engine
 
 with st.sidebar:
-    st.title("System Telemetry")
-    st.markdown(f"**Execution Hardware:** `{engine.device.upper()}`")
-    st.markdown(f"**Neural Engine:** `{'ViT-B-32 (Online)' if engine.model_loaded else 'Native Mathematical Fallback'}`")
-    st.markdown(f"**Indexed In-Memory Tiles:** `{len(engine.in_memory_index)}`")
+    st.title("ArthaDrishti Control")
+    st.markdown(f"**Hardware:** `{ai.device.upper()}`")
+    st.markdown(f"**AI Status:** `{'ONLINE' if ai.active else 'OFFLINE'}`")
+    st.markdown(f"**Indexed Chips:** `{len(ai.vector_index)}`")
     
     st.divider()
-    st.subheader("AI Acceleration Weights")
-    if not engine.model_loaded:
-        if st.button("Initialize Neural Weights", type="primary"):
-            with st.spinner("Downloading/Loading OpenCLIP Weights..."):
-                try:
-                    engine.load_model()
-                    st.success("Vision Transformer Weights Loaded!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to load weights: {e}")
+    if not ai.active:
+        if st.button("Initialize Neural Core", type="primary"):
+            with st.spinner("Loading Vision Transformer..."):
+                ai.boot_neural_core()
+                st.rerun()
     else:
-        st.success("Model active and ready for inference.")
-
+        st.success("System Ready for Operations.")
+        
     st.divider()
-    if st.button("Reset Session & Clear Cache"):
-        st.session_state.semantic_engine = EarthObservationSemanticEngine()
-        st.session_state.audit_trail = []
-        if "active_raster" in st.session_state:
-            del st.session_state["active_raster"]
-        if "scan_results" in st.session_state:
-            del st.session_state["scan_results"]
+    if st.button("Purge Database & Reset"):
+        st.session_state.ai_engine = ZeroShotSemanticCore()
+        st.session_state.audit_log = []
+        for key in ["active_img", "active_arr", "active_name", "scan_results"]:
+            if key in st.session_state: del st.session_state[key]
         st.rerun()
 
 
 # ==================================================================================================
-# 6. APPLICATION WORKSPACE TABS
+# 8. PRIMARY WORKFLOW INTERFACE
 # ==================================================================================================
-
-tab_ingest, tab_scan, tab_search, tab_anomaly, tab_audit, tab_docs = st.tabs([
-    "1. Dynamic Raster Ingest",
-    "2. Automated Semantic Scanner",
-    "3. Natural Language Search",
-    "4. Dynamic Anomaly Engine",
-    "5. Analyst Audit Ledger",
-    "6. Architectural Specs"
+tab_1, tab_2, tab_3, tab_4, tab_5 = st.tabs([
+    "1. Data Management & TCC", 
+    "2. Semantic Scanner", 
+    "3. Archive Retrieval", 
+    "4. Anomaly Engine", 
+    "5. Analyst Provenance"
 ])
 
-
 # --------------------------------------------------------------------------------------------------
-# TAB 1: DYNAMIC INGESTION & TRUE-COLOR COMPOSITE (TCC)
+# TAB 1: DATA MANAGEMENT & TRUE COLOR SYNTHESIS
 # --------------------------------------------------------------------------------------------------
-with tab_ingest:
-    st.subheader("Universal Raster Ingestion & Band Routing")
-    st.markdown("Upload **any** GeoTIFF (Sentinel-1 SAR, Sentinel-2 Optical, USGS Landsat, SRTM DEM). The pipeline extracts metadata and applies 2nd-98th percentile radiometric contrast stretching.")
-
-    uploaded_raster = st.file_uploader("Select GeoTIFF File (.tif / .tiff)", type=["tif", "tiff"], key="main_uploader")
-
-    if uploaded_raster:
-        col_ctrl, col_meta = st.columns([1, 2])
-        
-        with col_ctrl:
-            st.markdown("#### Band Synthesis Mapping")
-            st.caption("For multi-band rasters, specify 1-indexed channels for RGB rendering:")
-            r_idx = st.number_input("Red Band Channel:", min_value=1, max_value=32, value=1)
-            g_idx = st.number_input("Green Band Channel:", min_value=1, max_value=32, value=2)
-            b_idx = st.number_input("Blue Band Channel:", min_value=1, max_value=32, value=3)
+with tab_1:
+    st.subheader("Sensor-Agnostic Ingestion")
+    st.info("⚠️ **CRITICAL FOR AI ACCURACY:** The Vision AI requires True Color (RGB). If you upload multi-spectral data (like Sentinel-2 or USGS Landsat), you MUST map the bands correctly below to generate a natural looking image. False Color (red vegetation) will cause the AI to fail.")
+    
+    upload = st.file_uploader("Upload GeoTIFF Raster", type=["tif", "tiff"])
+    
+    if upload:
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.markdown("#### Band Alignment")
+            r_idx = st.number_input("Red Channel (Band #)", min_value=1, max_value=20, value=1)
+            g_idx = st.number_input("Green Channel (Band #)", min_value=1, max_value=20, value=2)
+            b_idx = st.number_input("Blue Channel (Band #)", min_value=1, max_value=20, value=3)
+            proc_btn = st.button("Synthesize Image", type="primary")
             
-            process_trigger = st.button("Process & Synthesize Imagery", type="primary")
-
-        if process_trigger or ("active_raster" in st.session_state and st.session_state.get("active_filename") == uploaded_raster.name):
-            with st.spinner("Decoding GeoTIFF & Normalizing Radiometry..."):
-                pil_img, rgb_arr, meta = SensorAgnosticProcessor.process_raster_bytes(
-                    uploaded_raster.getvalue(),
-                    red_ch=r_idx,
-                    green_ch=g_idx,
-                    blue_ch=b_idx
-                )
-                st.session_state.active_raster = {
-                    "image": pil_img,
-                    "array": rgb_arr,
-                    "meta": meta,
-                    "filename": uploaded_raster.name
-                }
-                st.session_state.active_filename = uploaded_raster.name
-
-            with col_meta:
-                st.markdown("#### Raster Spatial Telemetry")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Raster Dimensions", meta["dimensions"])
-                m2.metric("Band Count", meta["bands"])
-                m3.metric("Spatial Reference", meta["crs"])
-                st.caption(f"Bounding Envelope: {meta['bounds']}")
-
-            st.divider()
-            st.markdown("#### Synthesized Sensor View")
-            st.image(st.session_state.active_raster["image"], caption=f"Normalized Visual Synthesis | Source: {uploaded_raster.name}", use_container_width=True)
-
-
-# --------------------------------------------------------------------------------------------------
-# TAB 2: AUTOMATED SEMANTIC SCANNER & ONE-CLICK AUDIT
-# --------------------------------------------------------------------------------------------------
-with tab_scan:
-    st.subheader("Automated Multi-Phenomena Feature Extraction")
-    st.markdown("Automatically extracts spatial chips and runs parallel zero-shot classification against environmental and structural classes.")
-
-    if "active_raster" not in st.session_state:
-        st.warning("Please upload and process a raster in Tab 1 before launching the automated scanner.")
-    else:
-        current_data = st.session_state.active_raster
-        
-        c_sel, c_act = st.columns([3, 1])
-        with c_sel:
-            available_classes = list(EO_PROMPT_TAXONOMY.keys())
-            target_classes = st.multiselect("Select Target Phenomena to Detect:", available_classes, default=available_classes[:3])
-        with c_act:
-            st.markdown("<br>", unsafe_allow_html=True)
-            scan_now = st.button("Run Semantic Sweep", type="primary")
-
-        if scan_now:
-            if not target_classes:
-                st.error("Select at least one phenomenon category.")
-            else:
-                with st.spinner("Extracting spatial chips and evaluating against semantic vectors..."):
-                    chips = SensorAgnosticProcessor.extract_spatial_chips(current_data["array"], chip_size=TILE_SIZE, max_chips=16)
+        if proc_btn or "active_img" in st.session_state:
+            if proc_btn:
+                with st.spinner("Parsing radiometry..."):
+                    img, arr, meta = EarthObservationPipeline.synthesize_true_color(upload.getvalue(), r_idx, g_idx, b_idx)
+                    st.session_state.active_img = img
+                    st.session_state.active_arr = arr
+                    st.session_state.active_name = upload.name
+                    st.session_state.active_meta = meta
                     
-                    scan_results = []
-                    for chip in chips:
-                        # Index the chip into the searchable memory bank
-                        engine.register_chip(chip, current_data["filename"])
-                        
-                        # Classify with softmax confidence
-                        best_cls, confidence, all_probs = engine.classify_chip(chip["image"], target_classes)
-                        
-                        scan_results.append({
-                            "chip_id": chip["chip_id"],
-                            "image": chip["image"],
-                            "classification": best_cls,
-                            "confidence": confidence,
-                            "probabilities": all_probs,
-                            "source": current_data["filename"]
-                        })
+            with c2:
+                st.markdown("#### Telemetry")
+                st.write(f"**Source:** `{st.session_state.active_name}` | **CRS:** `{st.session_state.active_meta['crs']}`")
+                st.image(st.session_state.active_img, caption="True Color Composite (TCC)", use_container_width=True)
 
-                    st.session_state.scan_results = scan_results
-                    st.success(f"Successfully evaluated {len(chips)} spatial chips.")
+# --------------------------------------------------------------------------------------------------
+# TAB 2: AUTOMATED SEMANTIC SCANNER (WITH ABSOLUTE THRESHOLD)
+# --------------------------------------------------------------------------------------------------
+with tab_2:
+    st.subheader("Automated Multi-Phenomena Sweep")
+    st.markdown("Slices the active raster into chips and uses absolute cosine similarity to prevent classification hallucinations.")
+    
+    if "active_arr" not in st.session_state:
+        st.warning("Process a raster in Tab 1 first.")
+    else:
+        targets = st.multiselect("Select Target Phenomena:", list(TAXONOMY_KNOWLEDGE_BASE.keys()), default=["Water Body / River / Lake", "Dense Urban / Built-up"])
+        
+        if st.button("Run Semantic Sweep", type="primary"):
+            if not ai.active: st.error("Initialize Neural Core first.")
+            elif not targets: st.warning("Select targets.")
+            else:
+                with st.spinner("Extracting chips and classifying..."):
+                    chips = EarthObservationPipeline.extract_analytical_chips(st.session_state.active_arr)
+                    results = []
+                    for c in chips:
+                        ai.ingest_to_memory(c, st.session_state.active_name)
+                        label, score = ai.absolute_classification(c["image"], targets)
+                        results.append({"chip": c, "label": label, "score": score})
+                    st.session_state.scan_results = results
+                    st.success("Sweep Complete.")
 
         if "scan_results" in st.session_state:
-            results = st.session_state.scan_results
-            st.markdown(f"### Detected Features Across Archive ({len(results)} Chips)")
-
+            st.markdown("### Feature Detections & Analyst Review")
             cols = st.columns(4)
-            for idx, res in enumerate(results):
-                with cols[idx % 4]:
+            for i, res in enumerate(st.session_state.scan_results):
+                with cols[i % 4]:
                     st.markdown('<div class="audit-card">', unsafe_allow_html=True)
-                    st.image(res["image"], use_container_width=True)
+                    st.image(res["chip"]["image"], use_container_width=True)
                     
-                    st.markdown(f"**Target:** `{res['classification']}`")
-                    st.markdown(f"**Confidence:** `{res['confidence']*100:.1f}%`")
-                    
-                    btn_y, btn_n = st.columns(2)
-                    if btn_y.button("Confirm", key=f"y_{res['chip_id']}_{idx}"):
-                        record_analyst_decision(res["chip_id"], res["classification"], res["confidence"], "CONFIRMED", res["source"])
-                        st.success("Confirmed")
-                    if btn_n.button("Reject", key=f"n_{res['chip_id']}_{idx}"):
-                        record_analyst_decision(res["chip_id"], res["classification"], res["confidence"], "REJECTED", res["source"])
-                        st.error("Rejected")
-                    
+                    if "Unclassified" in res["label"]:
+                        st.markdown(f'<span class="status-badge badge-unclassified">Unclassified Background</span>', unsafe_allow_html=True)
+                        st.caption(f"Max Similarity: {res['score']:.2f} (Below Threshold)")
+                    else:
+                        st.markdown(f'<span class="status-badge badge-classified">DETECTED: {res["label"]}</span>', unsafe_allow_html=True)
+                        st.markdown(f"**Confidence:** `{res['score']*100:.1f}%`")
+                        
+                        b1, b2 = st.columns(2)
+                        if b1.button("✅", key=f"y_{res['chip']['id']}"):
+                            st.session_state.audit_log.append({
+                                "Time": datetime.utcnow().strftime("%H:%M:%S"), "Tile": res["chip"]["id"], 
+                                "Class": res["label"], "Action": "CONFIRMED", "Source": st.session_state.active_name
+                            })
+                            st.toast("Confirmed.")
+                        if b2.button("❌", key=f"n_{res['chip']['id']}"):
+                            st.session_state.audit_log.append({
+                                "Time": datetime.utcnow().strftime("%H:%M:%S"), "Tile": res["chip"]["id"], 
+                                "Class": res["label"], "Action": "REJECTED", "Source": st.session_state.active_name
+                            })
+                            st.toast("Rejected.")
                     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # --------------------------------------------------------------------------------------------------
-# TAB 3: NATURAL LANGUAGE RETRIEVAL
+# TAB 3: NATURAL LANGUAGE ARCHIVE RETRIEVAL
 # --------------------------------------------------------------------------------------------------
-with tab_search:
-    st.subheader("Multimodal Natural Language Archive Interrogation")
-    st.markdown("Search across all indexed spatial chips in memory using free-text natural language queries.")
-
-    q_col, k_col = st.columns([4, 1])
-    search_query = q_col.text_input("Enter natural language query:", "calm water body or reservoir")
-    top_k = k_col.number_input("Max Results:", min_value=1, max_value=16, value=4)
-
-    if st.button("Execute Natural Language Query", type="primary"):
-        if len(engine.in_memory_index) == 0:
-            st.warning("Archive is currently empty. Upload and sweep a raster in Tab 2 to populate the search catalog.")
+with tab_3:
+    st.subheader("Global Archive Interrogation")
+    q = st.text_input("Enter physical characteristic to search memory bank:", "large dense urban housing blocks")
+    n = st.number_input("Max Results", 1, 12, 4)
+    
+    if st.button("Search Archive", type="primary"):
+        if not ai.active: st.error("Initialize Neural Core.")
+        elif not ai.vector_index: st.warning("Archive empty. Sweep an image in Tab 2 to ingest chips.")
         else:
-            with st.spinner("Computing cosine similarities across vector index..."):
-                hits = engine.search_index(search_query, top_k=top_k)
-
-            if not hits:
-                st.info("No matching chips found.")
-            else:
-                st.markdown(f"**Retrieved {len(hits)} relevant targets:**")
-                h_cols = st.columns(len(hits))
-                for i, hit in enumerate(hits):
-                    with h_cols[i]:
-                        st.image(hit["image"], use_container_width=True)
-                        st.markdown(f"**ID:** `{hit['chip_id']}`")
-                        st.markdown(f"**Relevance:** `{hit['similarity']:.4f}`")
-                        st.caption(f"Source: {hit['source']}")
-
+            with st.spinner("Computing cosine distances..."):
+                hits = ai.semantic_search(q, n)
+            cols = st.columns(4)
+            for i, h in enumerate(hits):
+                with cols[i % 4]:
+                    st.image(h["image"], use_container_width=True)
+                    st.markdown(f"**Score:** `{h['score']*100:.1f}%`")
+                    st.caption(f"Src: {h['source']}")
 
 # --------------------------------------------------------------------------------------------------
-# TAB 4: DYNAMIC MULTI-TEMPORAL ANOMALY DETECTION
+# TAB 4: DYNAMIC ANOMALY ENGINE
 # --------------------------------------------------------------------------------------------------
-with tab_anomaly:
-    st.subheader("Dynamic Multi-Temporal Change & Anomaly Detection")
-    st.markdown("Upload both a **Baseline** and a **Target** raster directly through the interface to perform pixel-level radiometric change detection and morphological suppression.")
-
-    c1, c2 = st.columns(2)
-    base_file = c1.file_uploader("Upload Baseline Raster (T0)", type=["tif", "tiff"], key="anom_base")
-    targ_file = c2.file_uploader("Upload Target Raster (T1)", type=["tif", "tiff"], key="anom_targ")
-
-    if base_file and targ_file:
-        thresh_val = st.slider("Anomaly Deviation Threshold:", min_value=0.01, max_value=0.50, value=0.15, step=0.01)
-        
-        if st.button("Execute Radiometric Change Engine", type="primary"):
-            with st.spinner("Aligning grids and computing change matrix..."):
-                _, b_arr, _ = SensorAgnosticProcessor.process_raster_bytes(base_file.getvalue())
-                _, t_arr, _ = SensorAgnosticProcessor.process_raster_bytes(targ_file.getvalue())
-
-                # Crop to common intersection to prevent array dimension mismatches
-                min_h = min(b_arr.shape[0], t_arr.shape[0])
-                min_w = min(b_arr.shape[1], t_arr.shape[1])
-                b_cropped = b_arr[:min_h, :min_w]
-                t_cropped = t_arr[:min_h, :min_w]
-
-                # Convert to grayscale linear arrays
-                b_gray = np.mean(b_cropped, axis=-1) / 255.0
-                t_gray = np.mean(t_cropped, axis=-1) / 255.0
-
-                # Differential Radiometry
-                diff = np.abs(t_gray - b_gray)
-                raw_mask = diff > thresh_val
-
-                # Morphological filtering to suppress random speckle noise
-                labeled_array, num_features = label(raw_mask)
-                unique, counts = np.unique(labeled_array, return_counts=True)
-                cleaned_mask = np.zeros_like(raw_mask, dtype=bool)
-                for comp_id, size in zip(unique, counts):
-                    if comp_id != 0 and size >= 15: # minimum 15 connected pixels
-                        cleaned_mask[labeled_array == comp_id] = True
-
-                # Overlay anomalies in high-visibility red
-                overlay = t_cropped.copy()
-                overlay[cleaned_mask] = [255, 30, 30]
-
-                # Metrics
-                total_pixels = raw_mask.size
-                flagged = int(np.sum(cleaned_mask))
-                reduction = ((np.sum(raw_mask) - flagged) / max(1, np.sum(raw_mask))) * 100.0
-
-                m_a, m_b, m_c = st.columns(3)
-                m_a.metric("Total Scanned Pixels", f"{total_pixels:,}")
-                m_b.metric("Confirmed Anomalies", f"{flagged:,}")
-                m_c.metric("Speckle Noise Suppressed", f"{reduction:.1f}%")
-
+with tab_4:
+    st.subheader("Multi-Temporal Structural Change Matrix")
+    c_b, c_t = st.columns(2)
+    b_up = c_b.file_uploader("T0: Baseline Raster", type=["tif"])
+    t_up = c_t.file_uploader("T1: Target Raster", type=["tif"])
+    
+    if b_up and t_up:
+        thresh = st.slider("Absolute Difference Threshold", 0.05, 0.50, 0.15, 0.01)
+        if st.button("Compute Morphological Change", type="primary"):
+            with st.spinner("Processing differential arrays..."):
+                _, b_arr, _ = EarthObservationPipeline.synthesize_true_color(b_up.getvalue(), 1, 2, 3)
+                _, t_arr, _ = EarthObservationPipeline.synthesize_true_color(t_up.getvalue(), 1, 2, 3)
+                
+                mask, metrics = AnomalyDetectionEngine.compute_change(b_arr, t_arr, thresh)
+                
+                # Match target size for overlay
+                overlay = t_arr[:mask.shape[0], :mask.shape[1]].copy()
+                overlay[mask] = [255, 20, 20] # Bright red anomalies
+                
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Area Scanned (px)", f"{metrics['total_pixels']:,}")
+                m2.metric("Confirmed Anomalies", f"{metrics['anomalies']:,}")
+                m3.metric("Speckle Suppressed", f"{metrics['noise_suppressed']:,}")
+                
                 v1, v2 = st.columns(2)
-                v1.image(b_cropped, caption="Baseline Scene (T0)", use_container_width=True)
-                v2.image(overlay, caption="Target Scene (T1) + Structural Anomaly Overlay", use_container_width=True)
-
+                v1.image(b_arr[:mask.shape[0], :mask.shape[1]], caption="Baseline (T0)", use_container_width=True)
+                v2.image(overlay, caption="Target (T1) + Anomaly Matrix", use_container_width=True)
 
 # --------------------------------------------------------------------------------------------------
-# TAB 5: ANALYST AUDIT LEDGER
+# TAB 5: ANALYST PROVENANCE & AUDIT
 # --------------------------------------------------------------------------------------------------
-with tab_audit:
-    st.subheader("Analyst Decision Ledger & Sovereign Audit Trail")
-    st.markdown("All confirmation and rejection actions taken during the session are logged to maintain an immutable chain of custody.")
-
-    if not st.session_state.audit_trail:
-        st.info("No decisions logged yet in this session. Confirm or reject targets in Tab 2 to populate this ledger.")
+with tab_5:
+    st.subheader("Immutable Analyst Chain of Custody")
+    if not st.session_state.audit_log:
+        st.info("No decisions logged. Validate features in Tab 2.")
     else:
-        df_audit = pd.DataFrame(st.session_state.audit_trail)
-        st.dataframe(df_audit, use_container_width=True)
-
-        csv_data = df_audit.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Download Certified Audit Ledger (CSV)",
-            data=csv_data,
-            file_name=f"analyst_audit_log_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
-
-
-# --------------------------------------------------------------------------------------------------
-# TAB 6: ARCHITECTURAL SPECIFICATIONS & FORMULAS
-# --------------------------------------------------------------------------------------------------
-with tab_docs:
-    st.subheader("Mathematical & Architectural Framework")
-    st.markdown("### 1. Radiometric Calibration & Dynamic Contrast Stretch")
-    st.latex(r"I_{\text{norm}}(x, y) = \text{clip}\left(\frac{I(x, y) - P_2}{P_{98} - P_2 + \epsilon}, 0, 1\right) \times 255")
-    
-    st.markdown("### 2. Multi-Prompt Zero-Shot Semantic Vectorization")
-    st.latex(r"\mathbf{t}_{\text{ensemble}} = \frac{1}{M}\sum_{m=1}^{M} \frac{\mathcal{E}_{\text{text}}(p_m)}{\|\mathcal{E}_{\text{text}}(p_m)\|_2}, \quad \mathcal{S}(\mathbf{x}, \mathbf{t}) = \frac{\mathcal{E}_{\text{img}}(\mathbf{x}) \cdot \mathbf{t}_{\text{ensemble}}}{\|\mathcal{E}_{\text{img}}(\mathbf{x})\|_2}")
-    
-    st.markdown("### 3. Softmax Phenomenon Classification")
-    st.latex(r"P(c_k \mid \mathbf{x}) = \frac{\exp\left(\mathcal{S}(\mathbf{x}, \mathbf{t}_k) / \tau\right)}{\sum_{j=1}^{K}\exp\left(\mathcal{S}(\mathbf{x}, \mathbf{t}_j) / \tau\right)}")
-    
-    st.markdown("### 4. Morphological Speckle Suppression")
-    st.latex(r"M_{\text{final}} = \left\{ \mathbf{p} \in M_{\text{raw}} \mid |\text{ConnectedComponent}(\mathbf{p})| \ge 15 \right\}")
+        df = pd.DataFrame(st.session_state.audit_log)
+        st.dataframe(df, use_container_width=True)
+        st.download_button("Export SOV Audit Log", df.to_csv(index=False).encode('utf-8'), "audit.csv", "text/csv")
